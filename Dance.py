@@ -1,6 +1,7 @@
+import pandas as pd
+import numpy as np
 import cv2
 import mediapipe as mp
-import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -8,9 +9,6 @@ import joblib
 import warnings
 import time
 from collections import deque
-import streamlit as st
-
-st.title("GRIDDYMAX9000")
 
 # Suppress protobuf warnings to keep console clean
 warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf.symbol_database')
@@ -23,10 +21,14 @@ def load_artifacts(model_path='Model/dance_model.keras',
     Load the trained Keras model and preprocessing objects.
     """
     print("[INFO] Loading model and preprocessing artifacts...")
-    model = load_model(model_path)
-    scaler = joblib.load(scaler_path)
-    label_encoder = joblib.load(label_encoder_path)
-    max_seq_length = joblib.load(max_seq_length_path)
+    try:
+        model = load_model(model_path)
+        scaler = joblib.load(scaler_path)
+        label_encoder = joblib.load(label_encoder_path)
+        max_seq_length = joblib.load(max_seq_length_path)
+    except Exception as e:
+        print(f"[ERROR] Failed to load artifacts: {e}")
+        exit()
     print("[INFO] Model and preprocessing artifacts loaded successfully.")
     return model, scaler, label_encoder, max_seq_length
 
@@ -74,8 +76,14 @@ def main():
     features_per_landmark = 4  # x, y, z, visibility
     expected_features = num_landmarks * features_per_landmark  # 132
 
-    # Start capturing
+    # Initialize variables for displaying detected dance
+    last_detected_dance = None
+    last_confidence = 0.0
+    dance_display_start_time = 0  # Time when the dance was detected
+    SIGN_DISPLAY_DURATION = 9999    # Duration (seconds) to display detected sign (set to a large number)
+
     print("[INFO] Starting video capture. Press 'q' to quit.")
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -93,7 +101,7 @@ def main():
         landmarks = extract_landmarks(results, num_landmarks=num_landmarks)
         if landmarks:
             frame_buffer.append(landmarks)
-            # Optionally, visualize landmarks on the frame
+            # Visualize landmarks on the frame
             mp.solutions.drawing_utils.draw_landmarks(
                 frame,
                 results.pose_landmarks,
@@ -102,13 +110,14 @@ def main():
                 mp.solutions.drawing_utils.DrawingSpec(color=(0, 0, 255), thickness=2)
             )
         else:
+            # Optionally, you can handle missing landmarks here
             pass
 
         # Check if it's time to make a prediction
         current_time = time.time()
         if (current_time - last_prediction_time) >= prediction_interval:
-            if len(frame_buffer) == 0:
-                print("[WARNING] No frames to make a prediction.")
+            if len(frame_buffer) < max_seq_length:
+                print("[WARNING] Not enough frames to make a prediction.")
             else:
                 print("[INFO] Making a prediction...")
                 # Prepare the sequence
@@ -126,9 +135,12 @@ def main():
                 sequence = np.array(sequence)  # Shape: (max_seq_length, features)
 
                 # Scale the features
-                sequence_scaled = scaler.transform(sequence)
+                try:
+                    sequence_scaled = scaler.transform(sequence)
+                except Exception as e:
+                    print(f"[ERROR] Scaling failed: {e}")
+                    sequence_scaled = np.zeros_like(sequence)
 
-                # Pad sequences if necessary (already handled above)
                 # Compute variance features
                 variance = np.var(sequence_scaled, axis=0).reshape(1, -1)
 
@@ -136,16 +148,46 @@ def main():
                 sequence_scaled = np.expand_dims(sequence_scaled, axis=0)  # Shape: (1, max_seq_length, features)
 
                 # Make prediction
-                prediction = model.predict([sequence_scaled, variance])
-                predicted_label = label_encoder.inverse_transform([np.argmax(prediction)])
-                confidence = np.max(prediction)
+                try:
+                    prediction = model.predict([sequence_scaled, variance])
+                    predicted_label = label_encoder.inverse_transform([np.argmax(prediction)])
+                    confidence = np.max(prediction)
+                except Exception as e:
+                    print(f"[ERROR] Prediction failed: {e}")
+                    predicted_label = ["Unknown"]
+                    confidence = 0.0
 
                 print(f"[PREDICTION] {predicted_label[0]} (Confidence: {confidence:.2f})")
 
-                cv2.putText(frame, f"Dance Move: {predicted_label[0]} ({confidence*100:.1f}%)",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+                # Update the last detected dance and confidence if confidence is above threshold
+                confidence_threshold = 0.5  # You can adjust this threshold
+                if confidence >= confidence_threshold:
+                    last_detected_dance = predicted_label[0]
+                    last_confidence = confidence
+                    dance_display_start_time = current_time  # Reset display timer
 
-            last_prediction_time = current_time  # Reset the timer
+                last_prediction_time = current_time  # Reset the timer
+
+        # Display the detected dance and confidence
+        if last_detected_dance is not None:
+            # Check if the dance display duration has not elapsed
+            if (current_time - dance_display_start_time) < SIGN_DISPLAY_DURATION:
+                # Define the color for the text (Red in BGR format)
+                color = (0, 0, 255)  # OpenCV uses BGR, so red is (0, 0, 255)
+
+                # Add a semi-transparent black rectangle as a background for better text visibility
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (5, 50), (400, 130), (0, 0, 0), -1)  # Black rectangle
+                alpha = 0.4  # Transparency factor
+                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+                # Display the detected dance
+                cv2.putText(frame, f"Dance: {last_detected_dance}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, color, 2, cv2.LINE_AA)
+
+                # Display the confidence score below the dance name
+                cv2.putText(frame, f'Confidence: {last_confidence:.2f}', (10, 120),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
         # Display the resulting frame
         cv2.imshow('Dance Move Detection', frame)
@@ -162,3 +204,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
