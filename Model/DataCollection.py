@@ -7,8 +7,8 @@ from tqdm import tqdm  # For progress bars
 import numpy as np
 from collections import deque
 
-# Define valid dance names
-VALID_DANCE_NAMES = ['default_dance', 'griddy', 'floss']  # Add other dance names as needed
+# Dance names
+VALID_DANCE_NAMES = ['default_dance', 'griddy', 'floss', 'squabble', 'boogie_down', 'laugh', 'boogie_up']
 
 # Initialize MediaPipe Pose
 mp_drawing = mp.solutions.drawing_utils
@@ -211,7 +211,7 @@ def main():
     # List all video files directly inside the video_directory
     video_files = [
         f for f in os.listdir(video_directory)
-        if f.endswith(('.mp4', '.avi', '.mov')) and os.path.isfile(os.path.join(video_directory, f))
+        if f.endswith(('.mp4', '.avi', '.mov', '.mp4')) and os.path.isfile(os.path.join(video_directory, f))
     ]
 
     print(f"Found {len(video_files)} video(s) in '{video_directory}'.")
