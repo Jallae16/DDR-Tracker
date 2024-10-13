@@ -8,6 +8,9 @@ import joblib
 import warnings
 import time
 from collections import deque
+import streamlit as st
+
+st.title("GRIDDYMAX9000")
 
 # Suppress protobuf warnings to keep console clean
 warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf.symbol_database')
