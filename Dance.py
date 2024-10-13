@@ -2,35 +2,47 @@ import pandas as pd
 import numpy as np
 import cv2
 import mediapipe as mp
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-import joblib
-import warnings
 import time
-from collections import deque
+import random
 
-# Suppress protobuf warnings to keep console clean
-warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf.symbol_database')
-
-def load_artifacts(model_path='Model/dance_model.keras',
-                   scaler_path='Model/scaler.pkl',
-                   label_encoder_path='Model/label_encoder.pkl',
-                   max_seq_length_path='Model/max_seq_length.pkl'):
+def load_pose_data(csv_file_path='Model/dance_dataset/all_samples.csv'):
     """
-    Load the trained Keras model and preprocessing objects.
+    Load pose data from a CSV file.
+    Returns a dictionary mapping dance sequences (sample_numbers) to lists of frames.
+    Each frame is a list of 132 landmark values.
     """
-    print("[INFO] Loading model and preprocessing artifacts...")
     try:
-        model = load_model(model_path)
-        scaler = joblib.load(scaler_path)
-        label_encoder = joblib.load(label_encoder_path)
-        max_seq_length = joblib.load(max_seq_length_path)
+        # Read the CSV file
+        df = pd.read_csv(csv_file_path)
+
+        # Verify that the expected columns are present
+        expected_landmark_columns = 33 * 4  # 33 landmarks * 4 features (x, y, z, visibility)
+        total_columns = df.shape[1]
+
+        # The first three columns are 'sample_number', 'frame_number', 'dance_name'
+            # Landmark columns start from index 3
+        landmark_columns = df.columns[3:]
+        if len(landmark_columns) != expected_landmark_columns:
+            print(f"[ERROR] Expected {expected_landmark_columns} landmark columns, but found {len(landmark_columns)}.")
+            exit()
+        # Group the data by 'sample_number' (each dance sequence)
+        dance_sequences = {}
+
+        for sample_number, group in df.groupby('sample_number'):
+
+            # Sort the group by 'frame_number'
+            group = group.sort_values(by='frame_number')
+
+            # Extract landmark data
+            frames = group[landmark_columns].values.tolist()
+            dance_sequences[sample_number] = frames
+
+        return dance_sequences
+    
+    # Pose data failed to be grabbed
     except Exception as e:
-        print(f"[ERROR] Failed to load artifacts: {e}")
+        print(f"[ERROR] Failed to load pose data: {e}")
         exit()
-    print("[INFO] Model and preprocessing artifacts loaded successfully.")
-    return model, scaler, label_encoder, max_seq_length
 
 def extract_landmarks(results, num_landmarks=33):
     """
@@ -42,16 +54,86 @@ def extract_landmarks(results, num_landmarks=33):
 
     landmarks = results.pose_landmarks.landmark
     landmark_values = []
+
     for lm in landmarks[:num_landmarks]:
         landmark_values.extend([lm.x, lm.y, lm.z, lm.visibility])
+
     return landmark_values  # Length should be num_landmarks * 4
 
-def main():
-    # Load the model and preprocessing tools
-    model, scaler, label_encoder, max_seq_length = load_artifacts()
+def compute_pose_difference(pose1, pose2):
+    """
+    Compute the difference between two poses for scoring.
+    pose1 and pose2 are lists of 132 values.
+    Returns the sum of absolute differences (score).
+    """
+    pose1 = np.array(pose1)
+    pose2 = np.array(pose2)
 
-    # Get the list of dance labels
-    dance_labels = label_encoder.classes_
+    # Compute the absolute differences
+    differences = np.abs(pose1 - pose2)
+
+    # Sum the differences
+    total_difference = np.sum(differences)
+    return total_difference
+
+def draw_pose_landmarks_on_frame(landmark_list, frame, color=(0, 0, 255), visibility_threshold=0.5):
+    """
+    Draw pose landmarks onto the frame.
+
+    Args:
+        landmark_list (list): list of 132 values (33 landmarks * 4)
+        frame (numpy array): the frame to draw on
+        color (tuple): color to use for drawing (B, G, R)
+        visibility_threshold (float): minimum visibility to draw the landmark
+    """
+    # Reshape landmarks into (33, 4)
+    landmarks = np.array(landmark_list).reshape(33, 4)
+
+    # Get frame dimensions
+    frame_height, frame_width = frame.shape[:2]
+
+    # List to hold the landmark points
+    landmark_points = []
+
+    for idx, lm in enumerate(landmarks):
+
+        x_norm, y_norm, z, visibility = lm
+
+        if visibility < visibility_threshold:
+            landmark_points.append(None)  # Invisible landmark
+
+        else:
+            x_px = int(x_norm * frame_width)
+            y_px = int(y_norm * frame_height)
+            landmark_points.append((x_px, y_px))
+
+    # Draw connections onto screen
+    for connection in mp.solutions.pose.POSE_CONNECTIONS:
+        start_idx, end_idx = connection
+        start_point = landmark_points[start_idx]
+        end_point = landmark_points[end_idx]
+
+        if start_point is not None and end_point is not None:
+            cv2.line(frame, start_point, end_point, color, 2)
+
+    # Draw landmarks
+    for point in landmark_points:
+
+        if point is not None:
+            cv2.circle(frame, point, 5, color, -1)
+
+def main():
+
+    # Load dance sequences from CSV
+    dance_sequences = load_pose_data('Model/dance_dataset/all_samples.csv')
+
+    # Dance sequences failed to load
+    if not dance_sequences:
+        print("[ERROR] No dance sequences loaded.")
+        return
+
+    # Get the list of dance sequence IDs
+    sample_numbers = list(dance_sequences.keys())
 
     # Initialize MediaPipe Pose
     mp_pose = mp.solutions.pose
@@ -63,34 +145,36 @@ def main():
 
     # Initialize video capture (0 for default camera)
     cap = cv2.VideoCapture(0)
+
+    # Camera failed to open
     if not cap.isOpened():
         print("[ERROR] Cannot open camera.")
         return
-    
+
     # Set camera resolution to 1920x1080 (1080p)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-    # Initialize frame buffer
-    frame_buffer = deque(maxlen=max_seq_length)
-
-    # Define the number of landmarks expected (MediaPipe Pose has 33)
-    num_landmarks = 33
-    features_per_landmark = 4  # x, y, z, visibility
-    expected_features = num_landmarks * features_per_landmark  # 132
-
     # Game variables
-    current_state = 'WAITING_TO_START'
+    current_state = 'INSTRUCTIONS'
     state_start_time = time.time()
     rounds_played = 0
     total_score = 0
     max_rounds = 3
-    current_dance = None
-    performance_scores = []
+    current_dance_sequence = None
+    current_dance_frame_index = 0
+    total_frames_in_dance = 0
+    performance_differences = []
+
+    total_dance_duration = 8  # how long to dance
+    performance_start_time = 0
 
     print("[INFO] Starting video capture. Press 'q' to quit.")
 
+    # Infinte loop until 'q' pressed or 3 rounds met
     while True:
+
+        # Frame failed to be read
         ret, frame = cap.read()
         if not ret:
             print("[ERROR] Failed to grab frame.")
@@ -103,11 +187,10 @@ def main():
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(rgb_frame)
 
-        # Extract landmarks
-        landmarks = extract_landmarks(results, num_landmarks=num_landmarks)
+        # Extract pose landmarks
+        landmarks = extract_landmarks(results)
         if landmarks:
-            frame_buffer.append(landmarks)
-            # Visualize landmarks on the frame
+            # Visualize user's landmarks on the frame
             mp.solutions.drawing_utils.draw_landmarks(
                 frame,
                 results.pose_landmarks,
@@ -115,140 +198,160 @@ def main():
                 mp.solutions.drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
                 mp.solutions.drawing_utils.DrawingSpec(color=(0, 0, 255), thickness=2)
             )
-        else:
-            # Optionally, you can handle missing landmarks here
-            pass
 
         # Get the current time
         current_time = time.time()
         key = cv2.waitKey(1) & 0xFF
 
         # Game state management
-        if current_state == 'WAITING_TO_START':
-            # Display message to start the game
-            cv2.putText(frame, 'Press Spacebar to start', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
+        if current_state == 'INSTRUCTIONS':
+
+            # Display instructions on the frame
+            cv2.putText(frame, 'Welcome to the Dance Game!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.2, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, 'Press SPACEBAR to start.', (10, 140), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, 'Press Q to quit at any time.', (10, 200), cv2.FONT_HERSHEY_SIMPLEX,
+                        2, (0, 255, 0), 3, cv2.LINE_AA)
+
+            # Transition to countdown state on ' '
             if key == ord(' '):
-                current_state = 'GET_READY'
+                current_state = 'COUNTDOWN'
                 state_start_time = current_time
-                print("[INFO] Starting game.")
-                rounds_played = 0
-                total_score = 0
+                print("[INFO] Spacebar pressed. Starting countdown.")
 
-        elif current_state == 'GET_READY':
+        # Wait 5 seconds and display to screen before performance
+        elif current_state == 'COUNTDOWN':
             time_elapsed = current_time - state_start_time
-            time_remaining = int(5 - time_elapsed)
-            cv2.putText(frame, 'Get Ready!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
-            cv2.putText(frame, f'Starting in: {time_remaining}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
-            if time_elapsed >= 5:
+            countdown_time = 5 - int(time_elapsed)
+            if countdown_time > 0:
+                cv2.putText(frame, f'Starting in: {countdown_time}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                            2, (0, 255, 0), 3, cv2.LINE_AA)
+            
+            # Transition to performing state
+            else:
                 current_state = 'PERFORMING'
-                state_start_time = current_time
-                # Select a random dance
-                current_dance = np.random.choice(dance_labels)
-                print(f"[INFO] Perform the dance: {current_dance}")
-                # Reset performance scores and frame buffer
-                performance_scores = []
-                frame_buffer.clear()
+                performance_start_time = current_time
 
+                # Grab a random dance to do
+                current_dance_sequence_id = random.choice(sample_numbers)
+                current_dance_sequence = dance_sequences[current_dance_sequence_id]
+
+                # Dance length and frame index of dance
+                total_frames_in_dance = len(current_dance_sequence)
+                current_dance_frame_index = 0
+                print(f"[INFO] Perform the dance sequence. Total frames: {total_frames_in_dance}")
+                
+                # Reset performance differences
+                performance_differences = []
+
+        # Performing state
         elif current_state == 'PERFORMING':
-            time_elapsed = current_time - state_start_time
-            time_remaining = int(10 - time_elapsed)
-            cv2.putText(frame, f'Perform: {current_dance}', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
-            cv2.putText(frame, f'Time left: {time_remaining}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
 
-            # Make predictions if enough frames are available
-            min_frames_for_prediction = 10
-            if len(frame_buffer) >= min_frames_for_prediction:
-                # Prepare the sequence
-                sequence = list(frame_buffer)
-                num_frames = len(sequence)
+            time_elapsed = current_time - performance_start_time
 
-                # If sequence is shorter than max_seq_length, pad with zeros
-                if num_frames < max_seq_length:
-                    padding = [[0.0] * expected_features] * (max_seq_length - num_frames)
-                    sequence = padding + sequence  # Pre-pad with zeros
-                elif num_frames > max_seq_length:
-                    sequence = sequence[-max_seq_length:]  # Take the last max_seq_length frames
-
-                # Convert to numpy array
-                sequence = np.array(sequence)  # Shape: (max_seq_length, features)
-
-                # Scale the features
-                try:
-                    sequence_scaled = scaler.transform(sequence)
-                except Exception as e:
-                    print(f"[ERROR] Scaling failed: {e}")
-                    sequence_scaled = np.zeros_like(sequence)
-
-                # Compute variance features
-                variance = np.var(sequence_scaled, axis=0).reshape(1, -1)
-
-                # Expand dimensions for batch size
-                sequence_scaled = np.expand_dims(sequence_scaled, axis=0)  # Shape: (1, max_seq_length, features)
-
-                # Make prediction
-                try:
-                    prediction = model.predict([sequence_scaled, variance], verbose=0)
-                    predicted_label = label_encoder.inverse_transform([np.argmax(prediction)])
-                    confidence = np.max(prediction)
-                    print(confidence)
-                except Exception as e:
-                    print(f"[ERROR] Prediction failed: {e}")
-                    predicted_label = ["Unknown"]
-                    confidence = 0.0
-
-                # If the predicted label matches current_dance, store the confidence
-                if predicted_label[0] == current_dance:
-                    performance_scores.append(confidence)
-
-            if time_elapsed >= 10:
+            # Time to dance before scoring
+            if time_elapsed >= total_dance_duration:
+                
+                # Transition to scoring
                 current_state = 'SCORING'
                 state_start_time = current_time
 
+            else:
+
+                # Show dance and dance countdown on the screen
+                time_remaining = int(total_dance_duration - time_elapsed + 1)
+                cv2.putText(frame, 'Perform the Dance!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                            1.5, (0, 255, 0), 3, cv2.LINE_AA)
+                cv2.putText(frame, f'Time Left: {time_remaining}s', (10, 140), cv2.FONT_HERSHEY_SIMPLEX,
+                            1, (0, 255, 0), 2, cv2.LINE_AA)
+
+                # Get the current dance frame
+                current_dance_frame = current_dance_sequence[current_dance_frame_index]
+
+                # Draw the dance pose onto the frame
+                draw_pose_landmarks_on_frame(current_dance_frame, frame, color=(0, 0, 255))
+
+                # Ensure that landmarks are detected
+                if landmarks:
+
+                    # Compute the difference between user's pose and the dance pose
+                    difference = compute_pose_difference(landmarks, current_dance_frame)
+                    performance_differences.append(difference)
+
+                # Advance to the next frame
+                current_dance_frame_index += 1
+
+                # Loop dance until the dance countdown is over
+                if current_dance_frame_index >= total_frames_in_dance:
+                    # Loop the dance sequence
+                    current_dance_frame_index = 0
+
+        # Scoring state
         elif current_state == 'SCORING':
-            # Compute the average confidence
-            if performance_scores:
-                average_confidence = sum(performance_scores) / len(performance_scores)
-                score = average_confidence * 100  # Scale score as needed
+
+            # Compute the average difference
+            if performance_differences:
+                average_difference = sum(performance_differences) / len(performance_differences)
+                print(f"[Debug] average diff: {average_difference:.2f}    "
+                    f"sum performance diff: {sum(performance_differences)}   "
+                    f"len prf diff: {len(performance_differences)}")
+                
+                # Subtract scores from a perfect 100
+                score = 100 - (average_difference)
+
+                # Score can't be negative
+                score = max(score, 0)
+
+                # Sum score
                 total_score += score
-                print(f"[SCORE] You scored {score:.2f} points for {current_dance}")
+                print(f"[SCORE] You scored {score:.2f} points this round.")
+
+            # Score can't be calculated because there are no perfromance differences
             else:
                 score = 0
-                print(f"[SCORE] You scored {score:.2f} points for {current_dance}")
+                print(f"[SCORE] You scored {score:.2f} points this round.")
 
             # Display the score on the frame
-            cv2.putText(frame, f'Scored {score:.2f} points for {current_dance}', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, f'Scored {score:.2f} points!', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.2, (0, 255, 255), 3, cv2.LINE_AA)
 
             # Wait for 2 seconds before moving to the next state
             if current_time - state_start_time >= 2:
                 rounds_played += 1
+
+                # Max is 3 rounds and Game Over state
                 if rounds_played >= max_rounds:
                     current_state = 'GAME_OVER'
                     state_start_time = current_time
+                
+                # Loop to Instructions state if not final round
                 else:
-                    current_state = 'GET_READY'
+                    current_state = 'INSTRUCTIONS'
                     state_start_time = current_time
 
+        # Game Over state
         elif current_state == 'GAME_OVER':
             cv2.putText(frame, f'Game Over!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.5, (0, 0, 255), 3, cv2.LINE_AA)
+            
+            # Final score display (max is 300)
+            cv2.putText(frame, f'Final Score: {total_score:.2f}', (10, 140), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.2, (0, 0, 255), 3, cv2.LINE_AA)
+            
+            # Press 'q' to quit program
+            cv2.putText(frame, f'Press Q to quit.', (10, 200), cv2.FONT_HERSHEY_SIMPLEX,
                         1, (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.putText(frame, f'Final Score: {total_score:.2f}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.putText(frame, f'Press q to quit', (10, 160), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 0, 255), 2, cv2.LINE_AA)
+            
+            # quit program
             if key == ord('q'):
                 print("[INFO] Exiting...")
                 break
 
         # Display the resulting frame
-        cv2.imshow('Dance Move Detection', frame)
+        cv2.imshow('Sigma Stylecheck', frame)
 
-        # Break the loop on 'q' key press
+        # Quiet program with 'q'
         if key == ord('q'):
             print("[INFO] Exiting...")
             break
