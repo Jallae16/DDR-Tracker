@@ -46,6 +46,7 @@ narwhals==1.9.3
 numpy==1.26.4
 opencv-contrib-python==4.10.0.84
 opencv-python==4.10.0.84
+opencv-python-headless
 openml==0.15.0
 opt_einsum==3.4.0
 optree==0.12.1
