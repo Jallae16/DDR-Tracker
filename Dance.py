@@ -133,11 +133,6 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-    # Define the number of landmarks expected (MediaPipe Pose has 33)
-    num_landmarks = 33
-    features_per_landmark = 4  # x, y, z, visibility
-    expected_features = num_landmarks * features_per_landmark  # 132
-
     # Game variables
     current_state = 'INSTRUCTIONS'
     state_start_time = time.time()
@@ -150,7 +145,7 @@ def main():
     performance_differences = []
 
     total_dance_duration = 10  # seconds
-    time_per_dance_frame = 0   # will be computed when a dance is selected
+    performance_start_time = 0
 
     print("[INFO] Starting video capture. Press 'q' to quit.")
 
@@ -168,7 +163,7 @@ def main():
         results = pose.process(rgb_frame)
 
         # Extract landmarks
-        landmarks = extract_landmarks(results, num_landmarks=num_landmarks)
+        landmarks = extract_landmarks(results)
         if landmarks:
             # Visualize user's landmarks on the frame
             mp.solutions.drawing_utils.draw_landmarks(
@@ -215,31 +210,23 @@ def main():
                         2, (0, 255, 0), 3, cv2.LINE_AA)
             if current_time - state_start_time >= 1:
                 current_state = 'PERFORMING'
-                state_start_time = current_time
+                performance_start_time = current_time
                 # Select a random dance sequence
                 current_dance_sequence_id = random.choice(sample_numbers)
                 current_dance_sequence = dance_sequences[current_dance_sequence_id]
                 total_frames_in_dance = len(current_dance_sequence)
                 current_dance_frame_index = 0
-                # Compute time per dance frame
-                total_dance_duration = 10  # seconds, adjust as needed
-                time_per_dance_frame = total_dance_duration / total_frames_in_dance
                 print(f"[INFO] Perform the dance sequence. Total frames: {total_frames_in_dance}")
                 # Reset performance differences
                 performance_differences = []
 
         elif current_state == 'PERFORMING':
-            time_elapsed = current_time - state_start_time
+            time_elapsed = current_time - performance_start_time
             if time_elapsed >= total_dance_duration:
                 # Dance sequence is over
                 current_state = 'SCORING'
                 state_start_time = current_time
             else:
-                # Compute the current frame index
-                current_dance_frame_index = int(time_elapsed / time_per_dance_frame)
-                if current_dance_frame_index >= total_frames_in_dance:
-                    current_dance_frame_index = total_frames_in_dance - 1  # Ensure index is within bounds
-
                 time_remaining = int(total_dance_duration - time_elapsed + 1)
                 cv2.putText(frame, 'Perform the Dance!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
                             1.5, (0, 255, 0), 3, cv2.LINE_AA)
@@ -256,6 +243,12 @@ def main():
                     # Compute the difference between user's pose and the dance pose
                     difference = compute_pose_difference(landmarks, current_dance_frame)
                     performance_differences.append(difference)
+
+                # Advance to the next frame
+                current_dance_frame_index += 1
+                if current_dance_frame_index >= total_frames_in_dance:
+                    # Loop the dance sequence
+                    current_dance_frame_index = 0
 
         elif current_state == 'SCORING':
             # Compute the average difference
