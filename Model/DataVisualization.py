@@ -17,7 +17,9 @@ def get_landmark_columns():
     Generate a list of landmark columns based on the provided format.
     """
     landmarks = []
-    for i in range(33):  # MediaPipe Pose has 33 landmarks
+
+    # MediaPipe Pose has 33 landmarks
+    for i in range(33):
         for coord in ['x', 'y', 'z', 'visibility']:
             landmarks.append(f'landmark_{i}_{coord}')
     return landmarks
@@ -79,6 +81,7 @@ def visualize_all_dances(df, fps=10, canvas_size=(320, 240), max_columns=5, samp
 
     # Set up canvas dimensions
     width, height = canvas_size
+
     # Define grid layout per page
     rows_per_page, columns_per_page = calculate_grid(samples_per_page, max_columns=max_columns)
     total_width = width * columns_per_page
@@ -92,6 +95,7 @@ def visualize_all_dances(df, fps=10, canvas_size=(320, 240), max_columns=5, samp
     print("[INFO] Starting visualization. Press 'x' for next page, 'z' for previous page, 'q' to quit.")
 
     while True:
+
         # Calculate the range of samples for the current page
         start_idx = current_page * samples_per_page
         end_idx = min(start_idx + samples_per_page, num_samples)
@@ -176,19 +180,24 @@ def visualize_all_dances(df, fps=10, canvas_size=(320, 240), max_columns=5, samp
         if key == ord('q'):
             print("[INFO] Visualization terminated by user.")
             break
+
         elif key == ord('x'):
             # Move to the next page
             if current_page < total_pages - 1:
                 current_page += 1
                 print(f"[INFO] Moved to page {current_page + 1}/{total_pages}.")
+
             else:
                 print("[INFO] Reached the last page. Looping back to the first page.")
                 current_page = 0
+
         elif key == ord('z'):
+
             # Move to the previous page
             if current_page > 0:
                 current_page -= 1
                 print(f"[INFO] Moved to page {current_page + 1}/{total_pages}.")
+
             else:
                 print("[INFO] Already at the first page. Moving to the last page.")
                 current_page = total_pages - 1
@@ -197,7 +206,7 @@ def visualize_all_dances(df, fps=10, canvas_size=(320, 240), max_columns=5, samp
     cv2.destroyAllWindows()
 
 def main():
-    csv_path = 'dance_dataset/all_samples.csv'  # Update this path if necessary
+    csv_path = 'dance_dataset/all_samples.csv'
     df = load_csv(csv_path)
     visualize_all_dances(df, fps=10, canvas_size=(320, 240), max_columns=5, samples_per_page=10)
 
