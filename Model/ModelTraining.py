@@ -159,7 +159,7 @@ def predict_new_sample(model, scaler, encoder, max_seq_length, new_sample_frames
 # 7. Main Execution Flow
 def main():
     # File path to your dataset
-    csv_path = 'dance_data_revolution/all_samples.csv'  # Adjust with your path
+    csv_path = 'dance_dataset/all_samples.csv'  # Adjust with your path
     
     # Load and preprocess data
     X_seq, X_var, y, label_encoder, scaler, max_seq_length = load_and_preprocess_data(csv_path)

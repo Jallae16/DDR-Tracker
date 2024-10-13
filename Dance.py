@@ -99,7 +99,6 @@ def main():
                 mp.solutions.drawing_utils.DrawingSpec(color=(0, 0, 255), thickness=2)
             )
         else:
-            # If no landmarks detected, you might choose to handle it (e.g., append zeros or skip)
             pass
 
         # Check if it's time to make a prediction
@@ -140,7 +139,6 @@ def main():
 
                 print(f"[PREDICTION] {predicted_label[0]} (Confidence: {confidence:.2f})")
 
-                # Optionally, display the prediction on the frame
                 cv2.putText(frame, f"Dance Move: {predicted_label[0]} ({confidence*100:.1f}%)",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
 
