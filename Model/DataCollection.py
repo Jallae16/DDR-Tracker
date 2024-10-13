@@ -7,6 +7,9 @@ from tqdm import tqdm  # For progress bars
 import numpy as np
 from collections import deque
 
+# Define valid dance names
+VALID_DANCE_NAMES = ['default_dance', 'griddy', 'floss']  # Add other dance names as needed
+
 # Initialize MediaPipe Pose
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
@@ -72,13 +75,29 @@ def interpolate_missing_frames(prev_frame, next_frame, num_missing):
         interpolated_frames.append(interpolated_dict)
     return interpolated_frames
 
-def process_video(video_path, dance_name, sample_number, frames_per_sample=96, smoothing_window=5):
+def extract_dance_name(filename, valid_dances):
+    """
+    Extracts the dance name from the filename based on predefined valid dances.
+
+    Args:
+        filename (str): The name of the video file.
+        valid_dances (list): List of valid dance names.
+
+    Returns:
+        str: The extracted dance name if found; otherwise, 'unknown'.
+    """
+    filename_lower = filename.lower()
+    for dance in valid_dances:
+        if dance.lower() in filename_lower:
+            return dance.lower()  # Ensure lowercase
+    return 'unknown'  # Or handle as needed
+
+def process_video(video_path, sample_number, frames_per_sample=96, smoothing_window=5):
     """
     Processes a single video file to extract pose landmarks.
 
     Args:
         video_path (str): Path to the video file.
-        dance_name (str): Name of the dance corresponding to the video.
         sample_number (int): Identifier for the sample.
         frames_per_sample (int): Number of frames to extract per sample.
         smoothing_window (int): Number of frames for smoothing.
@@ -95,6 +114,16 @@ def process_video(video_path, dance_name, sample_number, frames_per_sample=96, s
         return data
 
     frame_interval = max(1, total_frames // frames_per_sample)  # To evenly sample frames
+
+    # Extract the filename from the path
+    video_filename = os.path.basename(video_path)
+    # Extract dance name using the helper function
+    dance_name = extract_dance_name(video_filename, VALID_DANCE_NAMES)
+
+    if dance_name == 'unknown':
+        print(f"[WARNING] Dance name not found in '{video_filename}'. Skipping this video.")
+        cap.release()
+        return data
 
     with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
         frame_count = 0
@@ -198,8 +227,7 @@ def main():
 
         # Process the video and extract data
         sample_data = process_video(
-            video_path,
-            dance_name=os.path.splitext(video_file)[0],  # Use video filename (without extension) as dance name
+            video_path=video_path,
             sample_number=sample_number,
             frames_per_sample=frames_per_sample,
             smoothing_window=smoothing_window

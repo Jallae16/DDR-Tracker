@@ -178,20 +178,6 @@ def main():
     
     # Save the model and preprocessors
     save_artifacts(model, scaler, label_encoder, max_seq_length)
-    
-    # Example Prediction (Uncomment and replace 'new_sample_frames' with actual data)
-    """
-    # Load the saved model and tools
-    loaded_model, loaded_scaler, loaded_encoder, loaded_max_seq_length = load_model_and_tools()
-    
-    # Define a new sample: list of frames, each frame is a list of landmark features
-    # Example: new_sample_frames = [[x0, y0, z0, v0, x1, y1, z1, v1, ..., x31, y31, z31, v31], ...]
-    new_sample_frames = np.random.rand(30, 128)  # Replace with actual data (30 frames, 128 features)
-    
-    # Predict the dance name
-    predicted_dance = predict_new_sample(loaded_model, loaded_scaler, loaded_encoder, loaded_max_seq_length, new_sample_frames)
-    print(f"Predicted Dance: {predicted_dance}")
-    """
 
 if __name__ == "__main__":
     main()

@@ -14,9 +14,9 @@ from collections import deque
 warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf.symbol_database')
 
 def load_artifacts(model_path='Model/dance_model.keras',
-                  scaler_path='Model/scaler.pkl',
-                  label_encoder_path='Model/label_encoder.pkl',
-                  max_seq_length_path='Model/max_seq_length.pkl'):
+                   scaler_path='Model/scaler.pkl',
+                   label_encoder_path='Model/label_encoder.pkl',
+                   max_seq_length_path='Model/max_seq_length.pkl'):
     """
     Load the trained Keras model and preprocessing objects.
     """
@@ -50,6 +50,9 @@ def main():
     # Load the model and preprocessing tools
     model, scaler, label_encoder, max_seq_length = load_artifacts()
 
+    # Get the list of dance labels
+    dance_labels = label_encoder.classes_
+
     # Initialize MediaPipe Pose
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose(static_image_mode=False,
@@ -63,24 +66,27 @@ def main():
     if not cap.isOpened():
         print("[ERROR] Cannot open camera.")
         return
+    
+    # Set camera resolution to 1920x1080 (1080p)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
     # Initialize frame buffer
     frame_buffer = deque(maxlen=max_seq_length)
-
-    # Timing for predictions
-    prediction_interval = 5  # seconds
-    last_prediction_time = time.time()
 
     # Define the number of landmarks expected (MediaPipe Pose has 33)
     num_landmarks = 33
     features_per_landmark = 4  # x, y, z, visibility
     expected_features = num_landmarks * features_per_landmark  # 132
 
-    # Initialize variables for displaying detected dance
-    last_detected_dance = None
-    last_confidence = 0.0
-    dance_display_start_time = 0  # Time when the dance was detected
-    SIGN_DISPLAY_DURATION = 9999    # Duration (seconds) to display detected sign (set to a large number)
+    # Game variables
+    current_state = 'WAITING_TO_START'
+    state_start_time = time.time()
+    rounds_played = 0
+    total_score = 0
+    max_rounds = 3
+    current_dance = None
+    performance_scores = []
 
     print("[INFO] Starting video capture. Press 'q' to quit.")
 
@@ -113,20 +119,57 @@ def main():
             # Optionally, you can handle missing landmarks here
             pass
 
-        # Check if it's time to make a prediction
+        # Get the current time
         current_time = time.time()
-        if (current_time - last_prediction_time) >= prediction_interval:
-            if len(frame_buffer) < max_seq_length:
-                print("[WARNING] Not enough frames to make a prediction.")
-            else:
-                print("[INFO] Making a prediction...")
+        key = cv2.waitKey(1) & 0xFF
+
+        # Game state management
+        if current_state == 'WAITING_TO_START':
+            # Display message to start the game
+            cv2.putText(frame, 'Press Spacebar to start', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 0), 2, cv2.LINE_AA)
+            if key == ord(' '):
+                current_state = 'GET_READY'
+                state_start_time = current_time
+                print("[INFO] Starting game.")
+                rounds_played = 0
+                total_score = 0
+
+        elif current_state == 'GET_READY':
+            time_elapsed = current_time - state_start_time
+            time_remaining = int(5 - time_elapsed)
+            cv2.putText(frame, 'Get Ready!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.putText(frame, f'Starting in: {time_remaining}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 0), 2, cv2.LINE_AA)
+            if time_elapsed >= 5:
+                current_state = 'PERFORMING'
+                state_start_time = current_time
+                # Select a random dance
+                current_dance = np.random.choice(dance_labels)
+                print(f"[INFO] Perform the dance: {current_dance}")
+                # Reset performance scores and frame buffer
+                performance_scores = []
+                frame_buffer.clear()
+
+        elif current_state == 'PERFORMING':
+            time_elapsed = current_time - state_start_time
+            time_remaining = int(10 - time_elapsed)
+            cv2.putText(frame, f'Perform: {current_dance}', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.putText(frame, f'Time left: {time_remaining}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 0), 2, cv2.LINE_AA)
+
+            # Make predictions if enough frames are available
+            min_frames_for_prediction = 10
+            if len(frame_buffer) >= min_frames_for_prediction:
                 # Prepare the sequence
                 sequence = list(frame_buffer)
                 num_frames = len(sequence)
 
                 # If sequence is shorter than max_seq_length, pad with zeros
                 if num_frames < max_seq_length:
-                    padding = [ [0.0]*expected_features ] * (max_seq_length - num_frames)
+                    padding = [[0.0] * expected_features] * (max_seq_length - num_frames)
                     sequence = padding + sequence  # Pre-pad with zeros
                 elif num_frames > max_seq_length:
                     sequence = sequence[-max_seq_length:]  # Take the last max_seq_length frames
@@ -149,51 +192,64 @@ def main():
 
                 # Make prediction
                 try:
-                    prediction = model.predict([sequence_scaled, variance])
+                    prediction = model.predict([sequence_scaled, variance], verbose=0)
                     predicted_label = label_encoder.inverse_transform([np.argmax(prediction)])
                     confidence = np.max(prediction)
+                    print(confidence)
                 except Exception as e:
                     print(f"[ERROR] Prediction failed: {e}")
                     predicted_label = ["Unknown"]
                     confidence = 0.0
 
-                print(f"[PREDICTION] {predicted_label[0]} (Confidence: {confidence:.2f})")
+                # If the predicted label matches current_dance, store the confidence
+                if predicted_label[0] == current_dance:
+                    performance_scores.append(confidence)
 
-                # Update the last detected dance and confidence if confidence is above threshold
-                confidence_threshold = 0.5  # You can adjust this threshold
-                if confidence >= confidence_threshold:
-                    last_detected_dance = predicted_label[0]
-                    last_confidence = confidence
-                    dance_display_start_time = current_time  # Reset display timer
+            if time_elapsed >= 10:
+                current_state = 'SCORING'
+                state_start_time = current_time
 
-                last_prediction_time = current_time  # Reset the timer
+        elif current_state == 'SCORING':
+            # Compute the average confidence
+            if performance_scores:
+                average_confidence = sum(performance_scores) / len(performance_scores)
+                score = average_confidence * 100  # Scale score as needed
+                total_score += score
+                print(f"[SCORE] You scored {score:.2f} points for {current_dance}")
+            else:
+                score = 0
+                print(f"[SCORE] You scored {score:.2f} points for {current_dance}")
 
-        # Display the detected dance and confidence
-        if last_detected_dance is not None:
-            # Check if the dance display duration has not elapsed
-            if (current_time - dance_display_start_time) < SIGN_DISPLAY_DURATION:
-                # Define the color for the text (Red in BGR format)
-                color = (0, 0, 255)  # OpenCV uses BGR, so red is (0, 0, 255)
+            # Display the score on the frame
+            cv2.putText(frame, f'Scored {score:.2f} points for {current_dance}', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 255, 255), 2, cv2.LINE_AA)
 
-                # Add a semi-transparent black rectangle as a background for better text visibility
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (5, 50), (400, 130), (0, 0, 0), -1)  # Black rectangle
-                alpha = 0.4  # Transparency factor
-                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+            # Wait for 2 seconds before moving to the next state
+            if current_time - state_start_time >= 2:
+                rounds_played += 1
+                if rounds_played >= max_rounds:
+                    current_state = 'GAME_OVER'
+                    state_start_time = current_time
+                else:
+                    current_state = 'GET_READY'
+                    state_start_time = current_time
 
-                # Display the detected dance
-                cv2.putText(frame, f"Dance: {last_detected_dance}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                            1, color, 2, cv2.LINE_AA)
-
-                # Display the confidence score below the dance name
-                cv2.putText(frame, f'Confidence: {last_confidence:.2f}', (10, 120),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+        elif current_state == 'GAME_OVER':
+            cv2.putText(frame, f'Game Over!', (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, f'Final Score: {total_score:.2f}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, f'Press q to quit', (10, 160), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv2.LINE_AA)
+            if key == ord('q'):
+                print("[INFO] Exiting...")
+                break
 
         # Display the resulting frame
         cv2.imshow('Dance Move Detection', frame)
 
         # Break the loop on 'q' key press
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if key == ord('q'):
             print("[INFO] Exiting...")
             break
 
@@ -204,4 +260,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

@@ -1,0 +1,12 @@
+{
+    "java.project.sourcePaths": [
+        "src",
+        "lib"
+    ],
+    "java.project.outputPath": "bin",
+    "java.project.referencedLibraries": [
+        "lib/**/*.jar",
+        "/Users/paulsantana/Downloads/json-20240303.jar",
+        "/Users/paulsantana/Downloads/jdk-11/lib/jrt-fs.jar"
+    ]
+}
