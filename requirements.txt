@@ -93,6 +93,7 @@ wheel==0.44.0
 wrapt==1.16.0
 xmltodict==0.14.1
 opencv-python
+!pip install opencv-python-headless
 mediapipe
 tensorflow
 numpy
